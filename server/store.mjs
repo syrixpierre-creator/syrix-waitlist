@@ -42,6 +42,28 @@ export async function createStore({ mongoUri, dbName } = {}) {
       const rows = await signups.find({}, { sort: { createdAt: 1 } }).toArray();
       return rows.map((r) => ({ id: r._id.toHexString(), email: r.email, product: r.product, lang: r.lang, channel: r.channel, source: r.source, created_at: r.createdAt.toISOString() }));
     },
+    async list({ product, q, page = 1, limit = 50 }) {
+      const filter = {};
+      if (product) filter.product = product;
+      if (q) filter.email = { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+      const [total, rows] = await Promise.all([
+        signups.countDocuments(filter),
+        signups.find(filter, { sort: { createdAt: -1 }, skip: (page - 1) * limit, limit }).toArray(),
+      ]);
+      return { total, rows: rows.map((r) => ({ id: r._id.toHexString(), email: r.email, product: r.product, lang: r.lang, channel: r.channel, source: r.source, created_at: r.createdAt.toISOString() })) };
+    },
+    async remove(id) {
+      const { ObjectId } = await import('mongodb');
+      if (!ObjectId.isValid(id)) return false;
+      return (await signups.deleteOne({ _id: new ObjectId(id) })).deletedCount === 1;
+    },
+    async daily(days = 30) {
+      const since = new Date(Date.now() - days * 86400000);
+      const rows = await signups
+        .aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: { d: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, p: '$product' }, n: { $sum: 1 } } }])
+        .toArray();
+      return rows.map((r) => ({ day: r._id.d, product: r._id.p, n: r.n }));
+    },
     ping: () => db.command({ ping: 1 }),
     close: () => client.close(),
   };
@@ -51,13 +73,14 @@ export async function createStore({ mongoUri, dbName } = {}) {
 export function createMemoryStore() {
   const rows = [];
   const seq = {};
+  let nextId = 0;
   return {
     kind: 'memory',
     async add(s, product) {
       const found = rows.find((r) => r.email === s.email && r.product === product);
       const pos = (r) => rows.filter((x) => x.product === product && x.seq <= r.seq).length;
       if (found) return { position: pos(found), existing: true };
-      const r = { id: String(rows.length + 1), ...s, product, seq: (seq[product] = (seq[product] || 0) + 1), created_at: new Date().toISOString() };
+      const r = { id: String(++nextId), ...s, product, seq: (seq[product] = (seq[product] || 0) + 1), created_at: new Date().toISOString() };
       rows.push(r);
       return { position: pos(r), existing: false };
     },
@@ -66,6 +89,24 @@ export function createMemoryStore() {
     },
     async all() {
       return rows.map(({ id, email, product, lang, channel, source, created_at }) => ({ id, email, product, lang, channel, source, created_at }));
+    },
+    async list({ product, q, page = 1, limit = 50 }) {
+      const all = rows.filter((r) => (!product || r.product === product) && (!q || r.email.includes(q.toLowerCase()))).reverse();
+      return { total: all.length, rows: all.slice((page - 1) * limit, page * limit).map(({ id, email, product, lang, channel, source, created_at }) => ({ id, email, product, lang, channel, source, created_at })) };
+    },
+    async remove(id) {
+      const i = rows.findIndex((r) => r.id === id);
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    },
+    async daily() {
+      const m = {};
+      for (const r of rows) {
+        const k = `${r.created_at.slice(0, 10)}|${r.product}`;
+        m[k] = (m[k] || 0) + 1;
+      }
+      return Object.entries(m).map(([k, n]) => ({ day: k.split('|')[0], product: k.split('|')[1], n }));
     },
     ping: async () => undefined,
     close: async () => undefined,

@@ -1,5 +1,6 @@
 import express from 'express';
 import { parseSignup, PRODUCTS } from './validate.mjs';
+import { readCookie } from './auth.mjs';
 
 /** Small fixed-window rate limiter kept in memory (one instance per process). */
 function rateLimit(max, windowMs) {
@@ -15,7 +16,7 @@ function rateLimit(max, windowMs) {
   };
 }
 
-export function createApp({ store, adminToken, mailer = null, staticDir = null, trustProxy = false, allowedOrigins = [] }) {
+export function createApp({ store, adminToken, adminAuth = null, mailer = null, staticDir = null, trustProxy = false, allowedOrigins = [] }) {
   const app = express();
   app.disable('x-powered-by');
   if (trustProxy) app.set('trust proxy', trustProxy);
@@ -56,12 +57,32 @@ export function createApp({ store, adminToken, mailer = null, staticDir = null, 
     }
   });
 
+  // Admin access: the /syrixadmin session cookie, or the ADMIN_TOKEN bearer token for scripts.
   const admin = (req, res, next) => {
+    if (adminAuth?.verify(readCookie(req, 'wl_admin'))) return next();
     const token = (req.headers.authorization || '').replace(/^Bearer /, '') || req.query.token;
-    if (!adminToken || token !== adminToken) return res.status(401).json({ error: 'unauthorized' });
-    next();
+    if (adminToken && token === adminToken) return next();
+    res.status(401).json({ error: 'unauthorized' });
   };
-  app.get('/api/admin/stats', admin, async (_req, res) => res.json({ counts: { ...Object.fromEntries(PRODUCTS.map((p) => [p, 0])), ...(await store.counts()) } }));
+  app.post('/api/admin/login', rateLimit(5, 15 * 60 * 1000), express.json({ limit: '2kb' }), (req, res) => {
+    if (!adminAuth?.enabled) return res.status(503).json({ error: 'admin_not_configured' });
+    if (!adminAuth.checkCredentials(req.body?.email, req.body?.password)) return res.status(401).json({ error: 'bad_credentials' });
+    res.set('Set-Cookie', adminAuth.cookie(adminAuth.issue(), adminAuth.maxAge)).json({ ok: true, email: adminAuth.email });
+  });
+  app.post('/api/admin/logout', (_req, res) => res.set('Set-Cookie', adminAuth ? adminAuth.cookie('', 0) : 'wl_admin=; Path=/api/admin; Max-Age=0').json({ ok: true }));
+  app.get('/api/admin/me', admin, (_req, res) => res.json({ email: adminAuth?.email ?? null }));
+  app.get('/api/admin/stats', admin, async (_req, res) =>
+    res.json({ counts: { ...Object.fromEntries(PRODUCTS.map((p) => [p, 0])), ...(await store.counts()) }, daily: await store.daily(30) }));
+  app.get('/api/admin/signups', admin, async (req, res) => {
+    const product = PRODUCTS.includes(req.query.product) ? req.query.product : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+    const page = Math.max(1, Math.min(10000, Number(req.query.page) || 1));
+    res.json({ page, limit: 50, ...(await store.list({ product, q, page, limit: 50 })) });
+  });
+  app.delete('/api/admin/signups/:id', admin, async (req, res) => {
+    const ok = await store.remove(String(req.params.id).slice(0, 40));
+    res.status(ok ? 200 : 404).json({ ok });
+  });
   app.get('/api/admin/export.csv', admin, async (_req, res) => {
     const rows = await store.all();
     const esc = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));

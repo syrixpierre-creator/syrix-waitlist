@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useInView, useReducedMotion, useScroll, useTransform } from 'motion/react';
 import {
-  Bot, Coins, Key as KeyIcon, History, Link2, Lock, MessageCircle, Phone, Plus, Radio, Send, Smartphone, Sparkles, Users, Volume2, VolumeX, Wallet, Zap, Camera, Check, ChevronDown, Megaphone,
+  Bot, Coins, Key as KeyIcon, History, Link2, Lock, MessageCircle, Phone, Plus, Radio, Send, Smartphone, Sparkles, Volume2, VolumeX, Wallet, Zap, Camera, Check, ChevronDown, Megaphone,
 } from 'lucide-react';
 import { t, type Key } from '../i18n';
 import { SyrixLogo, WhaRiseLogo } from './brand';
@@ -260,11 +260,6 @@ export const Footer = () => (
   <footer>
     <div className="wrap foot">
       <span>© 2026 · {t('footer.by')}</span>
-      <nav>
-        <a href="https://syrix.chat/terms">{t('footer.terms')}</a>
-        <a href="https://syrix.chat/privacy-policy">{t('footer.privacy')}</a>
-        <a href="https://syrix.chat"><Users size={14} style={{ display: 'inline', verticalAlign: '-2px' }} /> syrix.chat</a>
-      </nav>
     </div>
   </footer>
 );

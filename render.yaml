@@ -19,6 +19,12 @@ services:
         sync: false
       - key: MONGODB_DB
         value: syrix_waitlist
+      - key: ADMIN_EMAIL
+        value: syrixcompany@gmail.com
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
       - key: ADMIN_TOKEN
         generateValue: true
       - key: TRUST_PROXY

@@ -66,9 +66,6 @@ export default function App() {
         <section className="hero">
           <div className="wrap hero-grid">
             <div>
-              <motion.span className="kicker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-                <span className="dot" />{t('hero.kicker')}
-              </motion.span>
               <h1 className="h1" key={lang}>
                 <Kinetic text={t('hero.title1')} delay={0.1} />
                 <Kinetic text={t('hero.title2')} accent delay={0.35} />
