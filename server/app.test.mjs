@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from './app.mjs';
 import { createStore } from './store.mjs';
+// Uses the in-memory store; set TEST_MONGODB_URI to run the same tests against a real MongoDB (use an empty database).
 import { parseSignup } from './validate.mjs';
 
 async function boot() {
-  const store = await createStore({ sqlitePath: ':memory:' });
+  const store = await createStore({ mongoUri: process.env.TEST_MONGODB_URI });
   const app = createApp({ store, adminToken: 'secret' });
   const server = app.listen(0);
   const base = `http://127.0.0.1:${server.address().port}`;

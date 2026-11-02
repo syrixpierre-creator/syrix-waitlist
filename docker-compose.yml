@@ -1,11 +1,18 @@
+# Self-hosted alternative to Render: the site plus a local MongoDB.
 services:
   waitlist:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/syrix_waitlist}
     ports:
       - "127.0.0.1:8080:8080"
+    depends_on: [mongo]
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
     volumes:
-      - waitlist-data:/data
+      - waitlist-mongo:/data/db
 volumes:
-  waitlist-data:
+  waitlist-mongo:

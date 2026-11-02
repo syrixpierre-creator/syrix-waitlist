@@ -1,69 +1,73 @@
-// Waitlist storage: PostgreSQL when DATABASE_URL is set (needed on Vercel), SQLite file otherwise.
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS signups (
-  id ${'%ID%'},
-  email TEXT NOT NULL,
-  product TEXT NOT NULL,
-  lang TEXT NOT NULL,
-  channel TEXT,
-  source TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (email, product)
-)`;
+// Waitlist storage in MongoDB (MongoDB Atlas on Render). A memory store is used by the tests.
+//
+// signups:  { email, product, lang, channel, source, seq, createdAt }  unique (email, product)
+// counters: { _id: product, seq }  gives each new signup an increasing number per product.
+// A visitor's position is the number of signups of that product with seq <= theirs.
 
-export async function createStore({ databaseUrl, sqlitePath = 'data/waitlist.db' } = {}) {
-  if (databaseUrl) {
-    const { default: pg } = await import('pg');
-    const pool = new pg.Pool({ connectionString: databaseUrl, max: 5, ssl: /sslmode=require|neon\.tech|supabase/.test(databaseUrl) ? { rejectUnauthorized: false } : undefined });
-    await pool.query(SCHEMA.replace('%ID%', 'BIGSERIAL PRIMARY KEY'));
-    return {
-      kind: 'postgres',
-      async add(s, product) {
-        const ins = await pool.query(
-          `INSERT INTO signups (email, product, lang, channel, source, created_at) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (email, product) DO NOTHING RETURNING id`,
-          [s.email, product, s.lang, s.channel, s.source, new Date().toISOString()],
-        );
-        const row = ins.rows[0] ?? (await pool.query('SELECT id FROM signups WHERE email=$1 AND product=$2', [s.email, product])).rows[0];
-        const pos = await pool.query('SELECT COUNT(*)::int AS n FROM signups WHERE product=$1 AND id <= $2', [product, row.id]);
-        return { position: pos.rows[0].n, existing: ins.rows.length === 0 };
-      },
-      async counts() {
-        const r = await pool.query('SELECT product, COUNT(*)::int AS n FROM signups GROUP BY product');
-        return Object.fromEntries(r.rows.map((x) => [x.product, x.n]));
-      },
-      async all() {
-        return (await pool.query('SELECT id, email, product, lang, channel, source, created_at FROM signups ORDER BY id')).rows;
-      },
-      close: () => pool.end(),
-    };
-  }
+export async function createStore({ mongoUri, dbName } = {}) {
+  if (!mongoUri) return createMemoryStore();
+  const { MongoClient } = await import('mongodb');
+  const client = new MongoClient(mongoUri, { maxPoolSize: 10, serverSelectionTimeoutMS: 10000 });
+  await client.connect();
+  const db = client.db(dbName || undefined);
+  const signups = db.collection('signups');
+  const counters = db.collection('counters');
+  await signups.createIndex({ email: 1, product: 1 }, { unique: true });
+  await signups.createIndex({ product: 1, seq: 1 });
 
-  const { default: Database } = await import('better-sqlite3');
-  if (sqlitePath !== ':memory:') {
-    const { mkdirSync } = await import('node:fs');
-    const { dirname } = await import('node:path');
-    mkdirSync(dirname(sqlitePath), { recursive: true });
-  }
-  const db = new Database(sqlitePath);
-  db.pragma('journal_mode = WAL');
-  db.exec(SCHEMA.replace('%ID%', 'INTEGER PRIMARY KEY AUTOINCREMENT'));
-  const insert = db.prepare('INSERT OR IGNORE INTO signups (email, product, lang, channel, source, created_at) VALUES (?,?,?,?,?,?)');
-  const find = db.prepare('SELECT id FROM signups WHERE email=? AND product=?');
-  const position = db.prepare('SELECT COUNT(*) AS n FROM signups WHERE product=? AND id <= ?');
+  const positionOf = (doc) => signups.countDocuments({ product: doc.product, seq: { $lte: doc.seq } });
+
   return {
-    kind: 'sqlite',
+    kind: 'mongodb',
     async add(s, product) {
-      const r = insert.run(s.email, product, s.lang, s.channel, s.source, new Date().toISOString());
-      const id = find.get(s.email, product).id;
-      return { position: position.get(product, id).n, existing: r.changes === 0 };
+      const existing = await signups.findOne({ email: s.email, product });
+      if (existing) return { position: await positionOf(existing), existing: true };
+      const c = await counters.findOneAndUpdate({ _id: product }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: 'after' });
+      const doc = { email: s.email, product, lang: s.lang, channel: s.channel, source: s.source, seq: c.seq, createdAt: new Date() };
+      try {
+        await signups.insertOne(doc);
+      } catch (e) {
+        // Same e-mail submitted twice at the same moment: the other request won, report its row.
+        if (e?.code !== 11000) throw e;
+        const won = await signups.findOne({ email: s.email, product });
+        return { position: await positionOf(won), existing: true };
+      }
+      return { position: await positionOf(doc), existing: false };
     },
     async counts() {
-      return Object.fromEntries(db.prepare('SELECT product, COUNT(*) AS n FROM signups GROUP BY product').all().map((x) => [x.product, x.n]));
+      const rows = await signups.aggregate([{ $group: { _id: '$product', n: { $sum: 1 } } }]).toArray();
+      return Object.fromEntries(rows.map((r) => [r._id, r.n]));
     },
     async all() {
-      return db.prepare('SELECT id, email, product, lang, channel, source, created_at FROM signups ORDER BY id').all();
+      const rows = await signups.find({}, { sort: { createdAt: 1 } }).toArray();
+      return rows.map((r) => ({ id: r._id.toHexString(), email: r.email, product: r.product, lang: r.lang, channel: r.channel, source: r.source, created_at: r.createdAt.toISOString() }));
     },
-    close: async () => db.close(),
+    ping: () => db.command({ ping: 1 }),
+    close: () => client.close(),
+  };
+}
+
+/** In-memory store with the same behaviour, for tests and for trying the site without a database. */
+export function createMemoryStore() {
+  const rows = [];
+  const seq = {};
+  return {
+    kind: 'memory',
+    async add(s, product) {
+      const found = rows.find((r) => r.email === s.email && r.product === product);
+      const pos = (r) => rows.filter((x) => x.product === product && x.seq <= r.seq).length;
+      if (found) return { position: pos(found), existing: true };
+      const r = { id: String(rows.length + 1), ...s, product, seq: (seq[product] = (seq[product] || 0) + 1), created_at: new Date().toISOString() };
+      rows.push(r);
+      return { position: pos(r), existing: false };
+    },
+    async counts() {
+      return rows.reduce((a, r) => ({ ...a, [r.product]: (a[r.product] || 0) + 1 }), {});
+    },
+    async all() {
+      return rows.map(({ id, email, product, lang, channel, source, created_at }) => ({ id, email, product, lang, channel, source, created_at }));
+    },
+    ping: async () => undefined,
+    close: async () => undefined,
   };
 }

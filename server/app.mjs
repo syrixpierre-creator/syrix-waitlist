@@ -29,7 +29,14 @@ export function createApp({ store, adminToken, mailer = null, staticDir = null, 
     next();
   });
 
-  app.get('/api/health', (_req, res) => res.json({ ok: true, storage: store.kind }));
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await store.ping();
+      res.json({ ok: true, storage: store.kind });
+    } catch {
+      res.status(503).json({ ok: false, storage: store.kind });
+    }
+  });
 
   app.post('/api/waitlist', rateLimit(8, 10 * 60 * 1000), express.json({ limit: '8kb' }), async (req, res) => {
     const parsed = parseSignup(req.body);
