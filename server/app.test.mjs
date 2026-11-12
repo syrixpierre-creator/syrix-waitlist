@@ -34,16 +34,25 @@ test('signup, positions, dedupe, honeypot, admin', async () => {
     assert.deepEqual(r.results.map((x) => [x.product, x.position, x.existing]), [['syrix-chat', 1, false], ['wharise', 1, false]]);
     r = await (await post(base, { email: 'two@x.io', products: ['wharise'] })).json();
     assert.equal(r.results[0].position, 2);
-    r = await (await post(base, { email: 'ONE@x.io', products: ['wharise'] })).json();
+    // Same e-mail again (any letter case): refused, and nothing is stored a second time.
+    let dup = await post(base, { email: 'ONE@x.io', products: ['wharise'] });
+    assert.equal(dup.status, 409);
+    r = await dup.json();
+    assert.equal(r.error, 'already_registered');
     assert.deepEqual([r.results[0].position, r.results[0].existing], [1, true]);
+    // Already on one list, new on the other: only the new one is added.
+    dup = await post(base, { email: 'two@x.io', products: ['syrix-chat', 'wharise'] });
+    assert.equal(dup.status, 200);
+    r = await dup.json();
+    assert.deepEqual(r.results.map((x) => [x.product, x.position, x.existing]), [['syrix-chat', 2, false], ['wharise', 2, true]]);
     r = await (await post(base, { email: 'bot@x.io', products: ['wharise'], website: 'spam' })).json();
     assert.deepEqual(r.results, []);
     assert.equal((await post(base, { email: 'nope', products: ['wharise'] })).status, 400);
     assert.equal((await fetch(`${base}/api/admin/stats`)).status, 401);
     const stats = await (await fetch(`${base}/api/admin/stats`, { headers: { authorization: 'Bearer secret' } })).json();
-    assert.deepEqual(stats.counts, { 'syrix-chat': 1, wharise: 2 });
+    assert.deepEqual(stats.counts, { 'syrix-chat': 2, wharise: 2 });
     const csv = await (await fetch(`${base}/api/admin/export.csv?token=secret`)).text();
-    assert.equal(csv.trim().split('\n').length, 4);
+    assert.equal(csv.trim().split('\n').length, 5);
   } finally {
     close();
   }

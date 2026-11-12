@@ -49,6 +49,8 @@ export function createApp({ store, adminToken, adminAuth = null, mailer = null, 
     try {
       const results = [];
       for (const product of parsed.value.products) results.push({ product, ...(await store.add(parsed.value, product)) });
+      // An e-mail already on every list it asked for is refused: nothing new was stored.
+      if (results.every((r) => r.existing)) return res.status(409).json({ error: 'already_registered', results });
       if (mailer && results.some((r) => !r.existing)) mailer(parsed.value.email, parsed.value.lang, results).catch((e) => console.error('mail', e.message));
       res.json({ ok: true, results });
     } catch (e) {

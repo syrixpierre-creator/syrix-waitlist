@@ -7,7 +7,7 @@ import { SyrixLogo, WhaRiseLogo } from './brand';
 type Product = 'syrix-chat' | 'wharise';
 type Result = { product: Product; position: number; existing: boolean };
 const NAMES: Record<Product, string> = { 'syrix-chat': 'SYRIX CHAT', wharise: 'WhaRise' };
-const KNOWN_ERRORS = new Set(['err.invalid_email', 'err.no_product', 'err.invalid_channel', 'err.rate_limited']);
+const KNOWN_ERRORS = new Set(['err.invalid_email', 'err.no_product', 'err.invalid_channel', 'err.already_registered', 'err.rate_limited']);
 
 /** The real waitlist form: posts to /api/waitlist and shows the position returned by the server. */
 export default function WaitlistForm({ id }: { id?: string }) {
